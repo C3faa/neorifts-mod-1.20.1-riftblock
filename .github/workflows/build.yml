@@ -21,12 +21,16 @@ jobs:
           distribution: temurin
           java-version: 17
 
-      # Устанавливаем Gradle из репозиториев Ubuntu
-      - name: Install Gradle
+      # Ставим Gradle 8.2 без wrapper'а
+      - name: Install Gradle 8.2
         run: |
-          sudo apt-get update
-          sudo apt-get install -y gradle
-          gradle --version
+          GRADLE_VERSION=8.2
+          curl -L -o gradle.zip "https://services.gradle.org/distributions/gradle-${GRADLE_VERSION}-bin.zip"
+          unzip -q gradle.zip
+          echo "$PWD/gradle-${GRADLE_VERSION}/bin" >> $GITHUB_PATH
+
+      - name: Gradle version
+        run: gradle --version
 
       - name: Build with Gradle
         run: gradle --no-daemon build
