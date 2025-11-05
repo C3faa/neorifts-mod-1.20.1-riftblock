@@ -11,7 +11,6 @@ jobs:
   build:
     runs-on: ubuntu-latest
     env:
-      # Чуть длиннее таймауты скачивания зависимостей
       GRADLE_OPTS: "-Dorg.gradle.internal.http.connectionTimeout=120000 -Dorg.gradle.internal.http.socketTimeout=120000"
 
     steps:
@@ -34,7 +33,6 @@ jobs:
           restore-keys: |
             ${{ runner.os }}-gradle-
 
-      # Установка Gradle 8.10.2 без wrapper'а (Loom 1.6.x требует Gradle >= 8.6)
       - name: Install Gradle 8.10.2
         run: |
           GRADLE_VERSION=8.10.2
@@ -45,12 +43,11 @@ jobs:
       - name: Gradle version
         run: gradle --version
 
-      # (Опционально) Чистим возможный мусор в кеше, если ранее ловились странные координаты модулей
+      # (опционально) подчистить возможный мусор из кэша модулей
       - name: Nuke bad module cache (optional)
         run: |
           rm -rf ~/.gradle/caches/modules-2/metadata-2.*/descriptors/net_fabricmc_yarn_* || true
 
-      # Сборка с ретраями и принудительным обновлением зависимостей
       - name: Build with Gradle (clean + refresh + retries)
         shell: bash
         run: |
