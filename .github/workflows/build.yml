@@ -33,7 +33,7 @@ jobs:
           restore-keys: |
             ${{ runner.os }}-gradle-
 
-      - name: Install Gradle 8.10.2
+      - name: Ensure Gradle 8.10.2 on PATH
         run: |
           GRADLE_VERSION=8.10.2
           curl -L -o gradle.zip "https://services.gradle.org/distributions/gradle-${GRADLE_VERSION}-bin.zip"
@@ -43,10 +43,11 @@ jobs:
       - name: Gradle version
         run: gradle --version
 
-      # (опционально) подчистить возможный мусор из кэша модулей
-      - name: Nuke bad module cache (optional)
+      - name: Hard-clean weird cached coordinates (once)
         run: |
+          rm -rf ~/.gradle/caches/modules-2/files-2.1/net_fabricmc_yarn_* || true
           rm -rf ~/.gradle/caches/modules-2/metadata-2.*/descriptors/net_fabricmc_yarn_* || true
+          rm -rf ~/.gradle/caches/jars-9/* || true
 
       - name: Build with Gradle (clean + refresh + retries)
         shell: bash
