@@ -29,11 +29,10 @@ jobs:
           path: |
             ~/.gradle/caches
             ~/.gradle/wrapper
-          key: ${{ runner.os }}-gradle-${{ hashFiles('**/*.gradle*', '**/gradle-wrapper.properties') }}
+          key: ${{ runner.os }}-gradle-${{ hashFiles('**/*.gradle*', '**/gradle-wrapper.properties', 'settings.gradle') }}
           restore-keys: |
             ${{ runner.os }}-gradle-
 
-      # Устанавливаем Gradle 8.2 без wrapper'а
       - name: Install Gradle 8.2
         run: |
           GRADLE_VERSION=8.2
@@ -44,7 +43,6 @@ jobs:
       - name: Gradle version
         run: gradle --version
 
-      # Три попытки сборки (на случай сетевого таймаута до maven.fabricmc.net)
       - name: Build with Gradle (retries)
         shell: bash
         run: |
