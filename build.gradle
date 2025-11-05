@@ -3,33 +3,46 @@ plugins {
     id 'maven-publish'
 }
 
+group = 'com.neorifts'
+version = '0.1.0'
+
+java {
+    toolchain {
+        languageVersion = JavaLanguageVersion.of(17)
+    }
+    withSourcesJar()
+}
+
 repositories {
-    // дублировать не обязательно (есть в settings), но так нагляднее
-    maven { url 'https://libraries.minecraft.net/' }
-    maven { url 'https://maven.fabricmc.net/' }
+    // ВАЖНО: обычные репозитории объявляем здесь (а не в settings),
+    // Loom сам добавит свои 'Loom*' репозитории.
+    maven { url = 'https://maven.fabricmc.net/' }
     mavenCentral()
 }
 
 dependencies {
-    // версия игры
     minecraft "com.mojang:minecraft:1.20.1"
+    mappings  "net.fabricmc:yarn:1.20.1+build.10:v2"
 
-    // маппинги Yarn (в Loom 1.6 нельзя использовать loom.yarn(...))
-    mappings "net.fabricmc:yarn:1.20.1+build.10:v2"
-
-    // загрузчик Fabric
     modImplementation "net.fabricmc:fabric-loader:0.14.22"
 
-    // ТОЛЬКО монолитный Fabric API (никаких подмодулей!)
+    // Берём единый meta-артефакт Fabric API для 1.20.1
     modImplementation "net.fabricmc.fabric-api:fabric-api:0.92.3+1.20.1"
 }
 
-java {
-    toolchain { languageVersion = JavaLanguageVersion.of(17) }
+// Опционально: чтобы jar имел нормальное имя
+tasks.withType(Jar).configureEach {
+    archiveBaseName.set('neorifts')
 }
 
-// опционально: публикация — можно не трогать
+loom {
+    // без дополнительных трюков
+}
+
 publishing {
-    publications { }
-    repositories { }
+    publications {
+        mavenJava(MavenPublication) {
+            from components.java
+        }
+    }
 }
