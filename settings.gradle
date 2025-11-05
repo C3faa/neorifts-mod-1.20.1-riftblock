@@ -4,7 +4,6 @@ pluginManagement {
         gradlePluginPortal()
         mavenCentral()
     }
-    // Важно: маппим id плагина на модуль в Fabric Maven
     resolutionStrategy {
         eachPlugin {
             if (requested.id.id == "fabric-loom") {
@@ -15,14 +14,11 @@ pluginManagement {
 }
 
 dependencyResolutionManagement {
-    // Можно оставить PREFER_SETTINGS — Loom всё равно добавит свои репозитории; предупреждения не критичны
     repositoriesMode.set(RepositoriesMode.PREFER_SETTINGS)
     repositories {
-        maven { url 'https://libraries.minecraft.net/' } // Mojang libs (authlib, и т.п.)
-        maven { url 'https://maven.fabricmc.net/' }      // Fabric
+        maven { url 'https://libraries.minecraft.net/' }
+        maven { url 'https://maven.fabricmc.net/' }
         mavenCentral()
-        gradlePluginPortal()
-        maven { url 'https://maven.minecraftforge.net/' } // запасной
     }
 }
 
