@@ -11,10 +11,11 @@ group = 'com.neoseoul'
 version = '0.2.0'
 
 repositories {
-    maven { url 'https://libraries.minecraft.net/' } // <-- важно для com.mojang:authlib
+    maven { url 'https://libraries.minecraft.net/' }  // для com.mojang:authlib и др.
     maven { url 'https://maven.fabricmc.net/' }
     mavenCentral()
 }
+
 
 
 dependencies {
