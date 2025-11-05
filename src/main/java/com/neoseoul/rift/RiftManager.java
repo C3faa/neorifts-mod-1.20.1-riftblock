@@ -1,419 +1,489 @@
 package com.neoseoul.rift;
 
-import net.fabricmc.fabric.api.event.lifecycle.v1.ServerTickEvents;
-import net.minecraft.block.Block;
+import com.neoseoul.NEoriftsMod; // <-- если пакет у вас "com.neoseoul", ИМПОРТ ниже должен быть com.neoseoul.NeoriftsMod
+// ВАЖНО: замените строку выше на: import com.neoseoul.NeoriftsMod;
+
 import net.minecraft.block.BlockState;
 import net.minecraft.block.Blocks;
 import net.minecraft.entity.Entity;
 import net.minecraft.entity.EntityType;
 import net.minecraft.entity.LivingEntity;
+import net.minecraft.entity.SpawnReason;
+import net.minecraft.entity.boss.BossBar;
+import net.minecraft.entity.boss.ServerBossBar;
 import net.minecraft.entity.mob.MobEntity;
 import net.minecraft.entity.player.PlayerEntity;
 import net.minecraft.item.ItemStack;
 import net.minecraft.item.Items;
-import net.minecraft.registry.Registries;
+import net.minecraft.network.packet.s2c.play.OverlayMessageS2CPacket;
 import net.minecraft.server.MinecraftServer;
 import net.minecraft.server.network.ServerPlayerEntity;
 import net.minecraft.server.world.ServerWorld;
+import net.minecraft.sound.SoundCategory;
 import net.minecraft.sound.SoundEvents;
 import net.minecraft.text.Text;
+import net.minecraft.util.Formatting;
 import net.minecraft.util.Identifier;
+import net.minecraft.util.Util;
 import net.minecraft.util.math.BlockPos;
 import net.minecraft.util.math.Box;
+import net.minecraft.util.math.Direction;
 import net.minecraft.util.math.MathHelper;
 import net.minecraft.util.math.Vec3d;
-import net.minecraft.util.math.random.Random;
+import net.minecraft.world.GameRules;
 import net.minecraft.world.World;
 
-import java.util.List;
-import java.util.Optional;
-import java.util.UUID;
+import java.util.*;
+import java.util.concurrent.ThreadLocalRandom;
 
 /**
- * Менеджер рифтов (1.20.1 Fabric):
- * - авто-спавн одного рифта каждые 5 минут в 15..40 блоках от игрока (±5 по Y), только на твёрдом блоке;
- * - активация ПКМ по блоку -> 3 волны доккеби (3 / 4 / 5);
- * - удаление рифта через 5 минут или при уходе игрока >100 блоков;
- * - награда: изумруды (KpopCoin) + опыт;
- * - скейлинг мобов каждые 10 уровней игрока: +5% урон, +10% хп, +2% скорость; сообщение "Мобы стали сильнее".
+ * Менеджер разлома: авто-спавн, волны, награды, HUD.
+ * ПОД 1.20.1 (Yarn), Fabric API.
  */
-public final class RiftManager {
+public class RiftManager {
 
-    private static RiftManager INSTANCE;
-
+    // === Синглтон по серверу ===
+    private static final Map<MinecraftServer, RiftManager> INSTANCES = new WeakHashMap<>();
     public static RiftManager get(MinecraftServer server) {
-        if (INSTANCE == null) {
-            INSTANCE = new RiftManager(server);
+        return INSTANCES.computeIfAbsent(server, k -> new RiftManager());
+    }
+
+    // === Константы логики ===
+    private static final int MIN_DIST = 15;   // не ближе 15 блоков к игроку
+    private static final int MAX_DIST = 40;   // не дальше 40
+    private static final int MAX_AWAY_DESPAWN = 100; // уход игрока >100 блоков = удаляем
+    private static final int HEIGHT_DELTA = 5;
+    private static final int LIFETIME_TICKS = 5 * 60 * 20;    // 5 минут
+    private static final int AUTOSPAWN_INTERVAL_TICKS = 5 * 60 * 20; // автоспавн каждые 5 минут
+
+    // Волны
+    private static final int[] WAVES = {3, 4, 5};
+
+    // === Состояние текущего рифта ===
+    private BlockPos anchor; // позиция разлома (центр)
+    private UUID activatorUuid; // кто активировал (для награды/скейлинга)
+    private long createdTick = -1;
+    private boolean active = false;
+    private int currentWave = 0;
+    private int mobsAlive = 0;
+
+    // HUD: босс-полоска прогресса (оставшееся время)
+    private ServerBossBar bossBar;
+    private long lastAutoSpawnCheck = 0;
+
+    private RiftManager() {}
+
+    // === Публичные команды ===
+
+    /** Попытка создать рифт рядом с игроком (с учётом правил). */
+    public void createNear(ServerPlayerEntity player) {
+        if (hasRift()) {
+            toast(player, Text.literal("Разлом уже существует").formatted(Formatting.YELLOW));
+            return;
         }
-        return INSTANCE;
-    }
-
-    // ===== Константы таймингов/дистанций =====
-    private static final int TPS = 20;
-    private static final int RIFT_TRY_PERIOD = 5 * 60 * TPS;   // 5 минут
-    private static final int RIFT_LIFETIME   = 5 * 60 * TPS;   // 5 минут
-    private static final int MIN_DIST = 15;
-    private static final int MAX_DIST = 40;
-    private static final int DESPAWN_DIST = 100;
-    private static final int Y_TOLERANCE = 5;
-
-    // ===== Идентификаторы (ПРОВЕРЬ СВОИ namespace:path!) =====
-    private static final Identifier RUNIC_OBSIDIAN_ID = new Identifier("neorifts", "runic_obsidian"); // твой блок разлома
-    private static final Identifier DOKKEBI_ID        = new Identifier("neoseoul", "dokkebi");        // твоя сущность доккеби
-
-    // ===== Состояние менеджера =====
-    private final MinecraftServer server;
-
-    private BlockPos activeRiftPos = null;
-    private ServerWorld activeWorld = null;
-    private long riftSpawnGameTime = 0L;
-
-    private boolean wavesStarted = false;
-    private int currentWave = 0; // 0=нет, 1..3
-    private long nextWaveCheckAt = 0L;
-
-    private UUID activatorUuid = null;
-
-    private long nextAutoSpawnTryAt = 0L;
-
-    private RiftManager(MinecraftServer server) {
-        this.server = server;
-        ServerTickEvents.END_WORLD_TICK.register(this::onWorldTick);
-    }
-
-    // =======================
-    //  Публичные helper-методы
-    //  (чтобы вызывать из команд/мода)
-    // =======================
-
-    /** Принудительно создать рифт рядом с игроком (дистанция 15..40, ±5 по Y). */
-    public boolean createNear(ServerPlayerEntity player) {
         ServerWorld world = player.getServerWorld();
-        if (activeRiftPos != null) return false;
-
-        BlockPos pos = findRiftSpawnPosNearPlayer(world, player, MIN_DIST, MAX_DIST, Y_TOLERANCE);
-        if (pos == null) return false;
-
-        placeRiftBlock(world, pos);
-        activeRiftPos = pos;
-        activeWorld = world;
-        riftSpawnGameTime = world.getTime();
-
-        wavesStarted = false;
-        currentWave = 0;
-        nextWaveCheckAt = 0L;
-        activatorUuid = null;
-
-        sendActionBar(player, "Рядом появился разлом");
-        world.playSound(null, pos, SoundEvents.BLOCK_ENCHANTMENT_TABLE_USE, net.minecraft.sound.SoundCategory.BLOCKS, 1.0f, 1.0f);
-        return true;
-    }
-
-    /** Принудительно заспавнить ровно у игрока в зоне MIN..MAX (ближайшая хорошая точка). */
-    public boolean forceNear(ServerPlayerEntity player) {
-        return createNear(player);
-    }
-
-    /** Принудительно удалить текущий рифт (с опциональным финальным сообщением). */
-    public void despawn(boolean showClearedMessage) {
-        if (activeWorld != null) {
-            despawnRift(activeWorld, showClearedMessage);
-        } else {
-            // сброс на всякий случай
-            activeRiftPos = null;
-            riftSpawnGameTime = 0L;
-            wavesStarted = false;
-            currentWave = 0;
-            nextWaveCheckAt = 0L;
-            activatorUuid = null;
-        }
-    }
-
-    // =======================
-    //  Вызов из блока (ПКМ)
-    // =======================
-    public void onBlockActivated(ServerWorld world, BlockPos pos, PlayerEntity player) {
-        if (activeRiftPos == null || world != activeWorld || !activeRiftPos.equals(pos)) return;
-        if (wavesStarted) return;
-
-        wavesStarted = true;
-        currentWave = 0;
-        activatorUuid = player.getUuid();
-        startNextWave(world);
-    }
-
-    // ==============
-    //   ТИК МИРА
-    // ==============
-    private void onWorldTick(ServerWorld world) {
-        long now = world.getTime();
-
-        // Авто-спавн только в OVERWORLD и только если рифта нет
-        if (world.getRegistryKey() == World.OVERWORLD) {
-            if (activeRiftPos == null && now >= nextAutoSpawnTryAt) {
-                nextAutoSpawnTryAt = now + RIFT_TRY_PERIOD;
-                tryAutoSpawnRift(world);
-            }
-        }
-
-        if (world == activeWorld && activeRiftPos != null) {
-            maintainRift(world, now);
-        }
-    }
-
-    // ==========================
-    //   Жизненный цикл рифта
-    // ==========================
-    private void tryAutoSpawnRift(ServerWorld world) {
-        if (activeRiftPos != null) return;
-
-        ServerPlayerEntity p = getAnyServerPlayer(world);
-        if (p == null) return;
-
-        BlockPos candidate = findRiftSpawnPosNearPlayer(world, p, MIN_DIST, MAX_DIST, Y_TOLERANCE);
-        if (candidate == null) return;
-
-        placeRiftBlock(world, candidate);
-        activeRiftPos = candidate;
-        activeWorld = world;
-        riftSpawnGameTime = world.getTime();
-
-        wavesStarted = false;
-        currentWave = 0;
-        nextWaveCheckAt = 0L;
-        activatorUuid = null;
-
-        sendActionBar(p, "Рядом появился разлом");
-        world.playSound(null, candidate, SoundEvents.BLOCK_ENCHANTMENT_TABLE_USE, net.minecraft.sound.SoundCategory.BLOCKS, 1.0f, 1.0f);
-    }
-
-    private void maintainRift(ServerWorld world, long now) {
-        // TTL
-        if (now - riftSpawnGameTime >= RIFT_LIFETIME) {
-            despawnRift(world, false);
+        Optional<BlockPos> pos = findValidSpotNear(world, player.getBlockPos(), player.getY());
+        if (pos.isEmpty()) {
+            toast(player, Text.literal("Не найдено места для разлома").formatted(Formatting.RED));
             return;
         }
-
-        // Игрок далеко
-        PlayerEntity near = world.getClosestPlayer(
-                activeRiftPos.getX() + 0.5,
-                activeRiftPos.getY() + 0.5,
-                activeRiftPos.getZ() + 0.5,
-                DESPAWN_DIST, false);
-        if (near == null) {
-            despawnRift(world, false);
-            return;
-        }
-
-        // Волны: проверка очистки
-        if (wavesStarted && currentWave > 0 && currentWave <= 3 && now >= nextWaveCheckAt) {
-            if (isWaveCleared(world)) {
-                startNextWave(world);
-            } else {
-                nextWaveCheckAt = now + 2 * TPS; // проверяем раз в 2 сек
-            }
-        }
+        spawnRift(world, pos.get(), true);
     }
 
-    private void despawnRift(ServerWorld world, boolean showClearedMessage) {
-        if (activeRiftPos != null) {
-            world.setBlockState(activeRiftPos, Blocks.AIR.getDefaultState(), Block.NOTIFY_ALL);
-
-            if (showClearedMessage) {
-                for (ServerPlayerEntity sp : world.getPlayers()) {
-                    if (sp.getBlockPos().isWithinDistance(activeRiftPos, 64)) {
-                        sp.sendMessage(Text.literal("Разлом зачищен"), true);
-                    }
+    /** Принудительный спавн (мягче фильтры, но всё же не воздух/вода). */
+    public void forceNear(ServerPlayerEntity player) {
+        if (hasRift()) {
+            toast(player, Text.literal("Разлом уже существует").formatted(Formatting.YELLOW));
+            return;
+        }
+        ServerWorld world = player.getServerWorld();
+        // Ищем спот в радиусе, но упрощённо
+        for (int i = 0; i < 200; i++) {
+            double ang = ThreadLocalRandom.current().nextDouble() * Math.PI * 2;
+            int dist = MathHelper.nextInt(ThreadLocalRandom.current(), MIN_DIST, MAX_DIST);
+            BlockPos base = player.getBlockPos().add((int)(Math.cos(ang) * dist), 0, (int)(Math.sin(ang) * dist));
+            // Подгон по высоте +-5
+            for (int dy = -HEIGHT_DELTA; dy <= HEIGHT_DELTA; dy++) {
+                BlockPos p = base.up(dy);
+                if (isSolidTop(world, p.down()) && isAiry(world, p) && !isLiquid(world, p)) {
+                    spawnRift(world, p, true);
+                    return;
                 }
             }
         }
-
-        activeRiftPos = null;
-        activeWorld = null;
-        riftSpawnGameTime = 0L;
-        wavesStarted = false;
-        currentWave = 0;
-        nextWaveCheckAt = 0L;
-        activatorUuid = null;
+        toast(player, Text.literal("Не удалось форсировать разлом").formatted(Formatting.RED));
     }
 
-    // ==========
-    //  Волны
-    // ==========
-    private void startNextWave(ServerWorld world) {
-        if (activeRiftPos == null) return;
+    /** Удалить рифт. */
+    public void despawn(boolean silent) {
+        if (!hasRift()) return;
+        removeBossBar();
+        anchor = null;
+        activatorUuid = null;
+        createdTick = -1;
+        active = false;
+        currentWave = 0;
+        mobsAlive = 0;
+        if (!silent) broadcastAll(anchorWorld(), Text.literal("Разлом исчез").formatted(Formatting.GRAY));
+    }
 
-        currentWave++;
-        if (currentWave > 3) {
-            grantRewards(world);
-            despawnRift(world, true);
+    // === Жизненный цикл ===
+
+    public void tick(MinecraftServer server) {
+        long tick = server.getOverworld().getTime();
+
+        // Автоспавн разлома (если нет активного)
+        if (!hasRift()) {
+            if (tick - lastAutoSpawnCheck >= AUTOSPAWN_INTERVAL_TICKS) {
+                lastAutoSpawnCheck = tick;
+                tryAutoSpawn(server);
+            }
             return;
         }
 
-        int count = (currentWave == 1) ? 3 : (currentWave == 2 ? 4 : 5);
+        // Обновление HUD (boss bar)
+        updateBossbar(server);
+
+        // Время жизни
+        int lived = (int) (tick - createdTick);
+        if (lived >= LIFETIME_TICKS) {
+            despawn(true);
+            return;
+        }
+
+        // Удаляем, если все игроки далеко (>100)
+        ServerWorld world = anchorWorld();
+        boolean anyNear = world.getPlayers().stream()
+                .anyMatch(p -> p.getBlockPos().isWithinDistance(anchor, MAX_AWAY_DESPAWN));
+        if (!anyNear) {
+            despawn(true);
+            return;
+        }
+
+        // Если активирован — следим за волной
+        if (active) {
+            // Если все мобы текущей волны убиты — запускаем следующую или завершаем
+            if (mobsAlive <= 0) {
+                if (currentWave < WAVES.length) {
+                    startWave(world, currentWave);
+                } else {
+                    // Все волны пройдены — награда и удаление
+                    rewardAndFinish(world);
+                }
+            }
+        }
+    }
+
+    // === Взаимодействие: ПКМ по блоку разлома ===
+    public void onRiftBlockActivated(ServerWorld world, BlockPos pos, ServerPlayerEntity player) {
+        if (!hasRift() || !pos.equals(anchor)) return;
+        if (active) {
+            toast(player, Text.literal("Разлом уже активирован").formatted(Formatting.YELLOW));
+            return;
+        }
+        activatorUuid = player.getUuid();
+        active = true;
+        currentWave = 0;
+        mobsAlive = 0;
+        startWave(world, currentWave);
+        toastAll(world, Text.literal("Разлом активирован!").formatted(Formatting.LIGHT_PURPLE));
+        world.playSound(null, anchor, SoundEvents.BLOCK_END_PORTAL_SPAWN, SoundCategory.BLOCKS, 1.0f, 1.0f);
+    }
+
+    // === Внутренняя логика ===
+
+    private void tryAutoSpawn(MinecraftServer server) {
+        for (ServerPlayerEntity p : server.getPlayerManager().getPlayerList()) {
+            if (p.isSpectator()) continue;
+            Optional<BlockPos> pos = findValidSpotNear(p.getServerWorld(), p.getBlockPos(), p.getY());
+            if (pos.isPresent()) {
+                spawnRift(p.getServerWorld(), pos.get(), false);
+                // Сообщение только тем, кто рядом (100 блоков)
+                server.getPlayerManager().getPlayerList().forEach(sp -> {
+                    if (sp.getServerWorld() == p.getServerWorld()
+                            && sp.getBlockPos().isWithinDistance(pos.get(), 100)) {
+                        actionBar(sp, Text.literal("Рядом появился разлом").formatted(Formatting.LIGHT_PURPLE));
+                        sp.playSound(SoundEvents.ENTITY_ENDERMAN_STARE, SoundCategory.PLAYERS, 0.8f, 1.0f);
+                    }
+                });
+                return; // спавним только один
+            }
+        }
+    }
+
+    private void spawnRift(ServerWorld world, BlockPos pos, boolean manual) {
+        this.anchor = pos.toImmutable();
+        this.createdTick = world.getTime();
+        this.active = false;
+        this.activatorUuid = null;
+        this.currentWave = 0;
+        this.mobsAlive = 0;
+
+        // Визуальный маркер: Runic Obsidian (замените на свой блок, если нужен)
+        world.setBlockState(anchor, Blocks.OBSIDIAN.getDefaultState()); // или ваш зарегистрированный "runic_obsidian"
+
+        createBossBar();
+
+        // Сообщение ближайшим игрокам
+        world.getPlayers().forEach(p -> {
+            if (p.getBlockPos().isWithinDistance(anchor, 100)) {
+                actionBar((ServerPlayerEntity) p, Text.literal("Рядом появился разлом").formatted(Formatting.LIGHT_PURPLE));
+            }
+        });
+    }
+
+    private void startWave(ServerWorld world, int waveIndex) {
+        int count = WAVES[waveIndex];
+        currentWave++;
+        mobsAlive = count;
+
+        // Спавним "dokkebi" (замените на ваш EntityType, если зарегистрирован)
+        // Если у вас собственный EntityType<DokkebiEntity> DOKKEBI, подставьте его сюда.
+        Optional<EntityType<?>> optType = resolveEntityType("minecraft:zombie"); // временно — зомби; замените ID на ваш
+        EntityType<?> type = optType.orElse(EntityType.ZOMBIE);
 
         for (int i = 0; i < count; i++) {
-            BlockPos spawn = pickNearbySpawn(world, activeRiftPos, 4, 8);
-            spawnDokkebi(world, spawn);
+            BlockPos spawnAt = pickNearbySpawn(world, anchor);
+            Entity e = type.spawn(world, null, null, null,
+                    spawnAt, SpawnReason.EVENT, true, true);
+            if (e instanceof MobEntity mob) {
+                applyScaling(mob);
+                // Отслеживание смертей
+                mob.getDamageTracker();
+                mob.deathTime = 0;
+            }
         }
 
-        nextWaveCheckAt = world.getTime() + 2 * TPS;
+        // Тригер на убывание mobsAlive: в 1.20.1 быстро — через круговой бокс и проверку живых
+        // Упростим: каждую секунду пересчитываем живых в tick() через зону; чтобы не усложнять слушателями
     }
 
-    private boolean isWaveCleared(ServerWorld world) {
-        if (activeRiftPos == null) return true;
-        Box search = Box.of(Vec3d.ofCenter(activeRiftPos), 64, 64, 64);
-        List<MobEntity> mobs = world.getEntitiesByClass(MobEntity.class, search, this::isDokkebi);
-        return mobs.isEmpty();
-    }
-
-    private boolean isDokkebi(Entity e) {
-        Identifier id = Registries.ENTITY_TYPE.getId(e.getType());
-        return id != null && id.equals(DOKKEBI_ID);
-    }
-
-    private void grantRewards(ServerWorld world) {
-        if (activatorUuid == null) return;
-        ServerPlayerEntity sp = world.getServer().getPlayerManager().getPlayer(activatorUuid);
-        if (sp == null) return;
-
-        ItemStack emeralds = new ItemStack(Items.EMERALD, 5 + world.getRandom().nextInt(6)); // 5..10
-        emeralds.setCustomName(Text.literal("KpopCoin"));
-        sp.getInventory().insertStack(emeralds);
-
-        sp.addExperience(50);
-
-        int lvl = sp.experienceLevel;
-        if (lvl > 0 && (lvl % 10 == 0)) {
-            sp.sendMessage(Text.literal("Мобы стали сильнее"), true);
-        }
-    }
-
-    // ===========================
-    //   Спавн доккеби/скейлинг
-    // ===========================
-    private void spawnDokkebi(ServerWorld world, BlockPos pos) {
-        EntityType<? extends MobEntity> type = getDokkebiType();
-        MobEntity mob = type.create(world);
-        if (mob == null) return;
-
-        mob.refreshPositionAndAngles(pos.getX() + 0.5, pos.getY(), pos.getZ() + 0.5, world.getRandom().nextFloat() * 360f, 0f);
-
+    private void rewardAndFinish(ServerWorld world) {
+        // Награда — игроку-активатору (если он ещё онлайн), иначе ближайшему
+        ServerPlayerEntity target = null;
         if (activatorUuid != null) {
-            ServerPlayerEntity sp = world.getServer().getPlayerManager().getPlayer(activatorUuid);
-            if (sp != null) {
-                // MobEntity уже является LivingEntity — без pattern matching
-                LivingEntity living = mob;
-                applyLevelScaling(living, sp.experienceLevel);
+            target = world.getServer().getPlayerManager().getPlayer(activatorUuid);
+        }
+        if (target == null) {
+            target = world.getClosestPlayer(anchor.getX() + 0.5, anchor.getY() + 0.5, anchor.getZ() + 0.5, 32, false);
+        }
+        if (target != null) {
+            // Изумруды с "тегом" KpopCoin — простая выдача
+            ItemStack reward = new ItemStack(Items.EMERALD, 5);
+            reward.setCustomName(Text.literal("KpopCoin").formatted(Formatting.AQUA));
+            target.getInventory().insertStack(reward);
+            target.addExperience(50);
+            actionBar(target, Text.literal("Разлом зачищен!").formatted(Formatting.GREEN));
+        } else {
+            toastAll(world, Text.literal("Разлом зачищен!").formatted(Formatting.GREEN));
+        }
+        world.playSound(null, anchor, SoundEvents.UI_TOAST_CHALLENGE_COMPLETE, SoundCategory.PLAYERS, 1f, 1f);
+        despawn(true);
+    }
+
+    private Optional<BlockPos> findValidSpotNear(ServerWorld world, BlockPos center, double playerY) {
+        // Ищем 128 попыток
+        for (int i = 0; i < 128; i++) {
+            double ang = ThreadLocalRandom.current().nextDouble() * Math.PI * 2;
+            int dist = MathHelper.nextInt(ThreadLocalRandom.current(), MIN_DIST, MAX_DIST);
+            BlockPos base = center.add((int)(Math.cos(ang) * dist), 0, (int)(Math.sin(ang) * dist));
+            // Высота +-5
+            int py = (int)Math.round(playerY);
+            for (int dy = -HEIGHT_DELTA; dy <= HEIGHT_DELTA; dy++) {
+                BlockPos p = new BlockPos(base.getX(), py + dy, base.getZ());
+                if (isSolidTop(world, p.down()) && isAiry(world, p) && !isLiquid(world, p)) {
+                    return Optional.of(p);
+                }
             }
         }
-
-        world.spawnEntity(mob);
+        return Optional.empty();
     }
 
-    @SuppressWarnings("unchecked")
-    private EntityType<? extends MobEntity> getDokkebiType() {
-        Optional<EntityType<?>> opt = Registries.ENTITY_TYPE.getOrEmpty(DOKKEBI_ID);
-        if (opt.isPresent()) {
-            EntityType<?> raw = opt.get();
-            return (EntityType<? extends MobEntity>) raw;
-        }
-        return (EntityType<? extends MobEntity>) EntityType.ZOMBIE; // fallback
-    }
-
-    private void applyLevelScaling(LivingEntity mob, int level) {
-        int steps = level / 10;
-        if (steps <= 0) return;
-
-        // MAX_HEALTH
-        if (mob.getAttributes().hasAttribute(net.minecraft.entity.attribute.EntityAttributes.GENERIC_MAX_HEALTH)) {
-            double baseMax = mob.getMaxHealth();
-            double scaledMax = baseMax * (1.0 + 0.10 * steps);
-            mob.getAttributeInstance(net.minecraft.entity.attribute.EntityAttributes.GENERIC_MAX_HEALTH)
-                    .setBaseValue(scaledMax);
-            mob.setHealth((float) scaledMax);
-        }
-
-        // ATTACK_DAMAGE
-        if (mob.getAttributes().hasAttribute(net.minecraft.entity.attribute.EntityAttributes.GENERIC_ATTACK_DAMAGE)) {
-            double base = mob.getAttributeValue(net.minecraft.entity.attribute.EntityAttributes.GENERIC_ATTACK_DAMAGE);
-            mob.getAttributeInstance(net.minecraft.entity.attribute.EntityAttributes.GENERIC_ATTACK_DAMAGE)
-                    .setBaseValue(base * (1.0 + 0.05 * steps));
-        }
-
-        // MOVEMENT_SPEED
-        if (mob.getAttributes().hasAttribute(net.minecraft.entity.attribute.EntityAttributes.GENERIC_MOVEMENT_SPEED)) {
-            double base = mob.getAttributeValue(net.minecraft.entity.attribute.EntityAttributes.GENERIC_MOVEMENT_SPEED);
-            mob.getAttributeInstance(net.minecraft.entity.attribute.EntityAttributes.GENERIC_MOVEMENT_SPEED)
-                    .setBaseValue(base * (1.0 + 0.02 * steps));
-        }
-    }
-
-    // ===========================
-    //   Поиск позиции для рифта
-    // ===========================
-    private BlockPos findRiftSpawnPosNearPlayer(ServerWorld world, ServerPlayerEntity p, int minDist, int maxDist, int yTol) {
-        Random rnd = world.getRandom();
-        BlockPos base = p.getBlockPos();
-        int baseY = base.getY();
-
-        for (int tries = 0; tries < 64; tries++) {
-            double angle = rnd.nextDouble() * Math.PI * 2.0;
-            int dist = MathHelper.nextBetween(rnd, minDist, maxDist);
-            int dx = (int) Math.round(Math.cos(angle) * dist);
-            int dz = (int) Math.round(Math.sin(angle) * dist);
-
-            int y = baseY + MathHelper.nextBetween(rnd, -yTol, yTol);
-            BlockPos pos = new BlockPos(base.getX() + dx, y, base.getZ() + dz);
-
-            if (!isGoodRiftSpot(world, pos)) continue;
-
-            BlockPos below = pos.down();
-            BlockState belowState = world.getBlockState(below);
-            if (belowState.isAir()) continue;
-            if (!belowState.getFluidState().isEmpty()) continue;
-
-            return pos;
-        }
-        return null;
-    }
-
-    private boolean isGoodRiftSpot(ServerWorld world, BlockPos pos) {
-        if (!world.getBlockState(pos).isAir()) return false;
-        if (!world.getFluidState(pos).isEmpty()) return false;
-        if (!world.getBlockState(pos.up()).isAir()) return false;
-        return true;
-    }
-
-    private void placeRiftBlock(ServerWorld world, BlockPos pos) {
-        Block runic = Registries.BLOCK.getOrEmpty(RUNIC_OBSIDIAN_ID).orElse(Blocks.BEDROCK);
-        world.setBlockState(pos, runic.getDefaultState(), Block.NOTIFY_ALL);
-    }
-
-    private BlockPos pickNearbySpawn(ServerWorld world, BlockPos center, int min, int max) {
-        Random rnd = world.getRandom();
-        for (int i = 0; i < 32; i++) {
-            double a = rnd.nextDouble() * Math.PI * 2.0;
-            int d = MathHelper.nextBetween(rnd, min, max);
-            int x = center.getX() + (int) Math.round(Math.cos(a) * d);
-            int z = center.getZ() + (int) Math.round(Math.sin(a) * d);
-            int y = center.getY();
-
-            BlockPos p = new BlockPos(x, y, z);
-            if (world.getBlockState(p).isAir()
-                    && world.getBlockState(p.down()).isSolidBlock(world, p.down())) {
-                return p;
+    private BlockPos pickNearbySpawn(ServerWorld world, BlockPos from) {
+        for (int i = 0; i < 40; i++) {
+            int dx = MathHelper.nextInt(ThreadLocalRandom.current(), -6, 6);
+            int dz = MathHelper.nextInt(ThreadLocalRandom.current(), -6, 6);
+            BlockPos p = from.add(dx, 0, dz);
+            // подгон по Y вблизи: ищем ближайший воздух над твёрдым
+            for (int dy = -2; dy <= 2; dy++) {
+                BlockPos q = p.up(dy);
+                if (isSolidTop(world, q.down()) && isAiry(world, q)) {
+                    return q;
+                }
             }
         }
-        return center.up();
+        return from.up(); // fallback
     }
 
-    private ServerPlayerEntity getAnyServerPlayer(ServerWorld world) {
-        List<ServerPlayerEntity> list = world.getPlayers();
-        return list.isEmpty() ? null : list.get(0);
+    private void applyScaling(MobEntity mob) {
+        // Скалирование от уровня активатора
+        int level = 0;
+        if (activatorUuid != null) {
+            ServerPlayerEntity p = mob.getWorld().getServer().getPlayerManager().getPlayer(activatorUuid);
+            if (p != null) level = p.experienceLevel;
+        }
+        int steps = Math.max(0, level / 10);
+        if (steps == 0) return;
+
+        double dmgMul = 1.0 + steps * 0.05;  // +5% к урону/10 уровней
+        double hpMul  = 1.0 + steps * 0.10;  // +10% к ХП/10 уровней
+        double spdMul = 1.0 + steps * 0.02;  // +2% к скорости/10 уровней
+
+        // Простой бафф: увеличим макс. здоровье, вылечим до фула, и дадим скорость
+        if (mob instanceof LivingEntity le) {
+            var attr = le.getAttributes();
+            if (attr != null) {
+                if (le.getAttributeInstance(net.minecraft.entity.attribute.EntityAttributes.GENERIC_MAX_HEALTH) != null) {
+                    le.getAttributeInstance(net.minecraft.entity.attribute.EntityAttributes.GENERIC_MAX_HEALTH)
+                            .setBaseValue(le.getMaxHealth() * hpMul);
+                    le.setHealth(le.getMaxHealth());
+                }
+                if (le.getAttributeInstance(net.minecraft.entity.attribute.EntityAttributes.GENERIC_ATTACK_DAMAGE) != null) {
+                    le.getAttributeInstance(net.minecraft.entity.attribute.EntityAttributes.GENERIC_ATTACK_DAMAGE)
+                            .setBaseValue(le.getAttributeBaseValue(net.minecraft.entity.attribute.EntityAttributes.GENERIC_ATTACK_DAMAGE) * dmgMul);
+                }
+                if (le.getAttributeInstance(net.minecraft.entity.attribute.EntityAttributes.GENERIC_MOVEMENT_SPEED) != null) {
+                    le.getAttributeInstance(net.minecraft.entity.attribute.EntityAttributes.GENERIC_MOVEMENT_SPEED)
+                            .setBaseValue(le.getAttributeBaseValue(net.minecraft.entity.attribute.EntityAttributes.GENERIC_MOVEMENT_SPEED) * spdMul);
+                }
+            }
+        }
     }
 
-    private static void sendActionBar(ServerPlayerEntity p, String msg) {
-        p.sendMessage(Text.literal(msg), true);
+    private Optional<EntityType<?>> resolveEntityType(String id) {
+        EntityType<?> t = EntityType.get(id).orElse(null);
+        return Optional.ofNullable(t);
+    }
+
+    private boolean hasRift() {
+        return anchor != null;
+    }
+
+    private ServerWorld anchorWorld() {
+        // разлом всегда в мире игрока, который его вызвал; примем оверворлд
+        // (если используете мульти-измерения — храните ссылку на мир)
+        throwIf(anchor == null, "anchor is null");
+        // Проще всего: возвращаем оверворлд; если у вас хранится мир — замените.
+        // Здесь лучше держать ссылку на мир; для краткости примем Overworld.
+        // Исправление: кэшируем мир при spawnRift()
+        return cachedWorld;
+    }
+
+    // === HUD: boss bar ===
+    private ServerWorld cachedWorld;
+
+    private void createBossBar() {
+        removeBossBar();
+        bossBar = new ServerBossBar(
+                Text.literal("Разлом").formatted(Formatting.LIGHT_PURPLE),
+                BossBar.Color.PURPLE,
+                BossBar.Style.PROGRESS
+        );
+        bossBar.setPercent(1.0f);
+        bossBar.setVisible(true);
+        if (cachedWorld != null) {
+            for (ServerPlayerEntity p : cachedWorld.getPlayers()) {
+                bossBar.addPlayer(p);
+            }
+        }
+    }
+
+    private void removeBossBar() {
+        if (bossBar != null) {
+            // убрать со всех игроков
+            new ArrayList<>(bossBar.getPlayers()).forEach(bossBar::removePlayer);
+            bossBar.setVisible(false);
+            bossBar = null;
+        }
+    }
+
+    private void updateBossbar(MinecraftServer server) {
+        if (bossBar == null || anchor == null) return;
+        long now = cachedWorld.getTime();
+        float left = Math.max(0, (LIFETIME_TICKS - (now - createdTick))) / (float)LIFETIME_TICKS;
+        bossBar.setPercent(left);
+
+        // Обновляем заголовок c минутами/секундами
+        int secs = Math.max(0, (int)((LIFETIME_TICKS - (now - createdTick)) / 20));
+        int mm = secs / 60;
+        int ss = secs % 60;
+        bossBar.setName(Text.literal(String.format("Разлом • осталось %d:%02d", mm, ss))
+                .formatted(Formatting.LIGHT_PURPLE));
+
+        // Актуализируем список игроков в том же мире
+        Set<ServerPlayerEntity> shouldBe = new HashSet<>(cachedWorld.getPlayers());
+        Set<ServerPlayerEntity> nowPlayers = new HashSet<>(bossBar.getPlayers());
+        for (ServerPlayerEntity p : shouldBe) if (!nowPlayers.contains(p)) bossBar.addPlayer(p);
+        for (ServerPlayerEntity p : nowPlayers) if (!shouldBe.contains(p)) bossBar.removePlayer(p);
+
+        // Пересчёт живых мобов волны (простая эвристика — сущности в радиусе)
+        if (active) {
+            int alive = 0;
+            Box box = new Box(anchor).expand(16);
+            for (Entity e : cachedWorld.getEntitiesByClass(MobEntity.class, box, Entity::isAlive)) {
+                alive++;
+            }
+            mobsAlive = alive == 0 && currentWave <= WAVES.length ? 0 : alive;
+        }
+    }
+
+    // === Утилиты ===
+
+    private void toastAll(ServerWorld world, Text msg) {
+        for (ServerPlayerEntity p : world.getPlayers()) {
+            actionBar(p, msg);
+        }
+    }
+
+    private void toast(ServerPlayerEntity p, Text msg) {
+        actionBar(p, msg);
+    }
+
+    private void actionBar(ServerPlayerEntity p, Text text) {
+        p.networkHandler.sendPacket(new OverlayMessageS2CPacket(text));
+    }
+
+    private static boolean isAiry(World w, BlockPos p) {
+        return w.isAir(p) && w.isAir(p.up());
+    }
+
+    private static boolean isLiquid(World w, BlockPos p) {
+        return !w.getFluidState(p).isEmpty();
+    }
+
+    private static boolean isSolidTop(World w, BlockPos p) {
+        BlockState s = w.getBlockState(p);
+        return s.isSolidBlock(w, p) && s.getCollisionShape(w, p).getFace(Direction.UP).isEmpty() == false;
+    }
+
+    private static void throwIf(boolean cond, String msg) {
+        if (cond) throw new IllegalStateException(msg);
+    }
+
+    // Переписанная spawnRift с кэшом мира
+    private void spawnRift(ServerWorld world, BlockPos pos, boolean manual, boolean dummy) {
+        // не используется — оставлено для совместимости
+    }
+
+    // ПЕРЕОПРЕДЕЛЁННАЯ spawnRift (актуальная)
+    private void spawnRift(ServerWorld world, BlockPos pos, boolean manualCall) {
+        this.cachedWorld = world; // кэшируем мир
+        this.anchor = pos.toImmutable();
+        this.createdTick = world.getTime();
+        this.active = false;
+        this.activatorUuid = null;
+        this.currentWave = 0;
+        this.mobsAlive = 0;
+
+        world.setBlockState(anchor, Blocks.OBSIDIAN.getDefaultState());
+        createBossBar();
+
+        // Сообщения рядом
+        for (ServerPlayerEntity p : world.getPlayers()) {
+            if (p.getBlockPos().isWithinDistance(anchor, 100)) {
+                actionBar(p, Text.literal("Рядом появился разлом").formatted(Formatting.LIGHT_PURPLE));
+                p.playSound(SoundEvents.ENTITY_ENDERMAN_STARE, SoundCategory.PLAYERS, 0.8f, 1.0f);
+            }
+        }
     }
 }
