@@ -20,17 +20,16 @@ jobs:
         with:
           distribution: temurin
           java-version: 17
-          cache: gradle
 
-      # Устанавливаем Gradle 8.2 через SDKMAN (без wrapper'а)
-      - name: Install Gradle 8.2
-        uses: sdkman/sdkman-action@v2
-        with:
-          candidate: gradle
-          version: '8.2'
+      # Устанавливаем Gradle из репозиториев Ubuntu
+      - name: Install Gradle
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y gradle
+          gradle --version
 
       - name: Build with Gradle
-        run: gradle --version && gradle --no-daemon build
+        run: gradle --no-daemon build
 
       - name: Upload JAR artifact
         uses: actions/upload-artifact@v4
