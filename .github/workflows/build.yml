@@ -22,11 +22,15 @@ jobs:
           java-version: 17
           cache: gradle
 
-      - name: Grant execute permission for gradlew
-        run: chmod +x gradlew
+      # Устанавливаем Gradle 8.2 через SDKMAN (без wrapper'а)
+      - name: Install Gradle 8.2
+        uses: sdkman/sdkman-action@v2
+        with:
+          candidate: gradle
+          version: '8.2'
 
       - name: Build with Gradle
-        run: ./gradlew --no-daemon build
+        run: gradle --version && gradle --no-daemon build
 
       - name: Upload JAR artifact
         uses: actions/upload-artifact@v4
