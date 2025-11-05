@@ -1,21 +1,30 @@
 pluginManagement {
     repositories {
+        // где искать сам плагин fabric-loom
         maven { url 'https://maven.fabricmc.net/' }
         gradlePluginPortal()
         mavenCentral()
+    }
+    // КРИТИЧНО: явно маппим id 'fabric-loom' -> модуль на Fabric Maven
+    resolutionStrategy {
+        eachPlugin {
+            if (requested.id.id == "fabric-loom") {
+                useModule("net.fabricmc:fabric-loom:${requested.version}")
+            }
+        }
     }
 }
 
 dependencyResolutionManagement {
     repositoriesMode.set(RepositoriesMode.PREFER_SETTINGS)
     repositories {
-        // Mojang libraries (authlib и пр.)
+        // Mojang libs для authlib и пр.
         maven { url 'https://libraries.minecraft.net/' }
         // Основные
         maven { url 'https://maven.fabricmc.net/' }
         mavenCentral()
         gradlePluginPortal()
-        // Резервное зеркало (на случай сетевых глюков)
+        // Резерв
         maven { url 'https://maven.minecraftforge.net/' }
     }
 }
