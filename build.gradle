@@ -1,40 +1,29 @@
 plugins {
-    id 'fabric-loom' version '1.6.+'
+    id 'fabric-loom' version '1.6.12'
     id 'maven-publish'
 }
 
 repositories {
-    maven { url 'https://libraries.minecraft.net/' }
-    maven { url 'https://maven.fabricmc.net/' }
+    // Можно убрать этот блок и оставить репозитории в settings.gradle, но так тоже ок.
+    maven { url 'https://libraries.minecraft.net/' } // Mojang libs
+    maven { url 'https://maven.fabricmc.net/' }      // Fabric
     mavenCentral()
 }
 
 dependencies {
     minecraft "com.mojang:minecraft:1.20.1"
 
-    // Было: mappings loom.yarn("1.20.1+build.10:v2") — больше не поддерживается в Loom 1.6
-    // Стало: обычная координата Yarn
+    // В Loom 1.6 НЕЛЬЗЯ использовать loom.yarn(...).
+    // Правильно — обычной координатой:
     mappings "net.fabricmc:yarn:1.20.1+build.10:v2"
 
     // Загрузчик
     modImplementation "net.fabricmc:fabric-loader:0.14.22"
 
-    // Монолитный Fabric API (совместим с 1.20.1)
-    modImplementation "net.fabricmc.fabric-api:fabric-api:0.92.1+1.20.1"
+    // ТОЛЬКО монолитный Fabric API. Никаких подмодулей!
+    modImplementation "net.fabricmc.fabric-api:fabric-api:0.92.3+1.20.1"
 }
 
 java {
-    toolchain {
-        languageVersion = JavaLanguageVersion.of(17)
-    }
-}
-
-// (по желанию) публикация — можно оставить пустой
-publishing {
-    publications {
-        // …
-    }
-    repositories {
-        // …
-    }
+    toolchain { languageVersion = JavaLanguageVersion.of(17) }
 }
