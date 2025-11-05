@@ -5,12 +5,19 @@ pluginManagement {
         mavenCentral()
     }
 }
+
 dependencyResolutionManagement {
     repositoriesMode.set(RepositoriesMode.PREFER_SETTINGS)
     repositories {
+        // Mojang libraries (authlib и пр.)
+        maven { url 'https://libraries.minecraft.net/' }
+        // Основные
         maven { url 'https://maven.fabricmc.net/' }
         mavenCentral()
         gradlePluginPortal()
+        // Резервные зеркала (на случай сетевых сбоев)
+        maven { url 'https://maven.minecraftforge.net/' }
     }
 }
+
 rootProject.name = 'neorifts'
