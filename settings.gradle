@@ -15,7 +15,7 @@ dependencyResolutionManagement {
         maven { url 'https://maven.fabricmc.net/' }
         mavenCentral()
         gradlePluginPortal()
-        // Резервные зеркала (на случай сетевых сбоев)
+        // Резервное зеркало (на случай сетевых глюков)
         maven { url 'https://maven.minecraftforge.net/' }
     }
 }
