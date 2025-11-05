@@ -17,12 +17,12 @@ public class RunicObsidianBlock extends Block {
     }
 
     @Override
-    @SuppressWarnings("deprecation")
-    public ActionResult onUse(BlockState state, World world, BlockPos pos, PlayerEntity player, Hand hand, BlockHitResult hit) {
-        if (!world.isClient) {
-            RiftManager.get(((ServerWorld) world).getServer())
-                    .onBlockActivated((ServerWorld) world, pos, player);
+    public ActionResult onUse(BlockState state, World world, BlockPos pos,
+                              PlayerEntity player, Hand hand, BlockHitResult hit) {
+        if (!world.isClient && world instanceof ServerWorld sw) {
+            RiftManager.get(sw.getServer()).onBlockActivated(sw, pos, player);
+            return ActionResult.SUCCESS;
         }
-        return ActionResult.SUCCESS;
+        return ActionResult.CONSUME;
     }
 }
