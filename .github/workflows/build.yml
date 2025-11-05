@@ -29,7 +29,7 @@ jobs:
           path: |
             ~/.gradle/caches
             ~/.gradle/wrapper
-          key: ${{ runner.os }}-gradle-${{ hashFiles('**/*.gradle*', '**/gradle-wrapper.properties', 'settings.gradle') }}
+          key: ${{ runner.os }}-gradle-${{ hashFiles('**/*.gradle*', 'settings.gradle', '**/gradle-wrapper.properties') }}
           restore-keys: |
             ${{ runner.os }}-gradle-
 
@@ -43,15 +43,15 @@ jobs:
       - name: Gradle version
         run: gradle --version
 
-      - name: Build with Gradle (retries)
+      - name: Build with Gradle (retries + refresh)
         shell: bash
         run: |
           set +e
           for i in 1 2 3; do
             echo "Attempt $i..."
-            gradle --no-daemon --info --stacktrace build && ok=1 && break
-            echo "Gradle failed (attempt $i). Waiting 15s and retrying..."
-            sleep 15
+            gradle --no-daemon --refresh-dependencies --info --stacktrace build && ok=1 && break
+            echo "Gradle failed (attempt $i). Waiting 20s and retrying..."
+            sleep 20
           done
           if [ -z "$ok" ]; then
             echo "Build failed after 3 attempts"; exit 1
