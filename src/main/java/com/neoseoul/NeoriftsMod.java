@@ -2,6 +2,8 @@ package com.neoseoul;
 
 import com.mojang.brigadier.Command;
 import com.mojang.brigadier.context.CommandContext;
+import com.neoseoul.block.ModBlocks;
+import com.neoseoul.rift.RiftManager;
 import net.fabricmc.api.ModInitializer;
 import net.fabricmc.fabric.api.command.v2.CommandRegistrationCallback;
 import net.fabricmc.fabric.api.event.lifecycle.v1.ServerLifecycleEvents;
@@ -11,25 +13,28 @@ import net.minecraft.server.command.ServerCommandSource;
 import net.minecraft.server.network.ServerPlayerEntity;
 import net.minecraft.text.Text;
 
-// импорт менеджера
-import com.neoseoul.rift.RiftManager;
-
 public class NeoriftsMod implements ModInitializer {
 
+    // Основной идентификатор мода
     public static final String MOD_ID = "neorifts";
+    // Алиас, чтобы не падали места где используется MODID
+    public static final String MODID = MOD_ID;
 
     @Override
     public void onInitialize() {
-        // Гарантированно создаём инстанс RiftManager при старте сервера
+        // Регистрируем блоки/предметы
+        ModBlocks.register();
+
+        // Создаём инстанс RiftManager при старте сервера
         ServerLifecycleEvents.SERVER_STARTED.register((MinecraftServer server) -> {
             RiftManager.get(server);
         });
 
-        // Регистрируем простые команды: /rift create, /rift despawn
+        // /rift create | /rift despawn | /rift force
         CommandRegistrationCallback.EVENT.register((dispatcher, registryAccess, environment) -> {
             dispatcher.register(
                     CommandManager.literal("rift")
-                            .requires(src -> src.hasPermissionLevel(2)) // опционально: только операторы
+                            .requires(src -> src.hasPermissionLevel(2))
                             .then(CommandManager.literal("create").executes(this::cmdCreate))
                             .then(CommandManager.literal("despawn").executes(this::cmdDespawn))
                             .then(CommandManager.literal("force").executes(this::cmdForce))
