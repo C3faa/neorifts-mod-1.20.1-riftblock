@@ -12,7 +12,6 @@ import net.minecraft.util.math.BlockPos;
 import net.minecraft.world.World;
 
 public class RunicObsidianBlock extends Block {
-
     public RunicObsidianBlock(Settings settings) {
         super(settings);
     }
@@ -21,7 +20,8 @@ public class RunicObsidianBlock extends Block {
     @SuppressWarnings("deprecation")
     public ActionResult onUse(BlockState state, World world, BlockPos pos, PlayerEntity player, Hand hand, BlockHitResult hit) {
         if (!world.isClient) {
-            RiftManager.get(world.getServer()).onBlockActivated((ServerWorld) world, pos, player);
+            RiftManager.get(((ServerWorld) world).getServer())
+                    .onBlockActivated((ServerWorld) world, pos, player);
         }
         return ActionResult.SUCCESS;
     }
