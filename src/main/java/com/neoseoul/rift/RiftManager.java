@@ -30,12 +30,12 @@ import java.util.Optional;
 import java.util.UUID;
 
 /**
- * Менеджер рифтов:
- * - авто-спавн 1 рифта каждые 5 минут на дистанции 15..40 от игрока (±5 по Y), только на твёрдом блоке;
- * - активация ПКМ по блоку рифта -> 3 волны доккеби (3/4/5);
- * - удаление рифта через 5 минут или если игрок ушёл дальше 100 блоков;
- * - бафы мобов каждые 10 уровней игрока: +5% урон, +10% хп, +2% скорость;
- * - сообщение "Мобы стали сильнее" на каждом 10 уровне.
+ * Менеджер рифтов (1.20.1 Fabric):
+ * - авто-спавн одного рифта каждые 5 минут в 15..40 блоках от игрока (±5 по Y), только на твёрдом блоке;
+ * - активация ПКМ по блоку -> 3 волны доккеби (3 / 4 / 5);
+ * - удаление рифта через 5 минут или при уходе игрока >100 блоков;
+ * - награда: изумруды (KpopCoin) + опыт;
+ * - скейлинг мобов каждые 10 уровней игрока: +5% урон, +10% хп, +2% скорость; сообщение "Мобы стали сильнее".
  */
 public final class RiftManager {
 
@@ -48,7 +48,7 @@ public final class RiftManager {
         return INSTANCE;
     }
 
-    // ==== тайминги/радиусы ====
+    // ===== Константы таймингов/дистанций =====
     private static final int TPS = 20;
     private static final int RIFT_TRY_PERIOD = 5 * 60 * TPS;   // 5 минут
     private static final int RIFT_LIFETIME   = 5 * 60 * TPS;   // 5 минут
@@ -57,11 +57,11 @@ public final class RiftManager {
     private static final int DESPAWN_DIST = 100;
     private static final int Y_TOLERANCE = 5;
 
-    // ==== id блока/сущности ====
-    private static final Identifier RUNIC_OBSIDIAN_ID = new Identifier("neorifts", "runic_obsidian"); // поменяйте при другом id
-    private static final Identifier DOKKEBI_ID        = new Identifier("neoseoul", "dokkebi");        // поменяйте при другом id
+    // ===== Идентификаторы (ПРОВЕРЬ СВОИ namespace:path!) =====
+    private static final Identifier RUNIC_OBSIDIAN_ID = new Identifier("neorifts", "runic_obsidian"); // твой блок разлома
+    private static final Identifier DOKKEBI_ID        = new Identifier("neoseoul", "dokkebi");        // твоя сущность доккеби
 
-    // ==== состояние ====
+    // ===== Состояние менеджера =====
     private final MinecraftServer server;
 
     private BlockPos activeRiftPos = null;
@@ -79,6 +79,54 @@ public final class RiftManager {
     private RiftManager(MinecraftServer server) {
         this.server = server;
         ServerTickEvents.END_WORLD_TICK.register(this::onWorldTick);
+    }
+
+    // =======================
+    //  Публичные helper-методы
+    //  (чтобы вызывать из команд/мода)
+    // =======================
+
+    /** Принудительно создать рифт рядом с игроком (дистанция 15..40, ±5 по Y). */
+    public boolean createNear(ServerPlayerEntity player) {
+        ServerWorld world = player.getServerWorld();
+        if (activeRiftPos != null) return false;
+
+        BlockPos pos = findRiftSpawnPosNearPlayer(world, player, MIN_DIST, MAX_DIST, Y_TOLERANCE);
+        if (pos == null) return false;
+
+        placeRiftBlock(world, pos);
+        activeRiftPos = pos;
+        activeWorld = world;
+        riftSpawnGameTime = world.getTime();
+
+        wavesStarted = false;
+        currentWave = 0;
+        nextWaveCheckAt = 0L;
+        activatorUuid = null;
+
+        sendActionBar(player, "Рядом появился разлом");
+        world.playSound(null, pos, SoundEvents.BLOCK_ENCHANTMENT_TABLE_USE, net.minecraft.sound.SoundCategory.BLOCKS, 1.0f, 1.0f);
+        return true;
+    }
+
+    /** Принудительно заспавнить ровно у игрока в зоне MIN..MAX (ближайшая хорошая точка). */
+    public boolean forceNear(ServerPlayerEntity player) {
+        return createNear(player);
+    }
+
+    /** Принудительно удалить текущий рифт (с опциональным финальным сообщением). */
+    public void despawn(boolean showClearedMessage) {
+        if (activeWorld != null) {
+            despawnRift(activeWorld, showClearedMessage);
+        } else {
+            // сброс на всякий случай
+            activeRiftPos = null;
+            riftSpawnGameTime = 0L;
+            wavesStarted = false;
+            currentWave = 0;
+            nextWaveCheckAt = 0L;
+            activatorUuid = null;
+        }
     }
 
     // =======================
@@ -100,7 +148,7 @@ public final class RiftManager {
     private void onWorldTick(ServerWorld world) {
         long now = world.getTime();
 
-        // Авто-спавн только в верхнем мире и если рифта нет
+        // Авто-спавн только в OVERWORLD и только если рифта нет
         if (world.getRegistryKey() == World.OVERWORLD) {
             if (activeRiftPos == null && now >= nextAutoSpawnTryAt) {
                 nextAutoSpawnTryAt = now + RIFT_TRY_PERIOD;
@@ -140,14 +188,17 @@ public final class RiftManager {
     }
 
     private void maintainRift(ServerWorld world, long now) {
-        // Время жизни
+        // TTL
         if (now - riftSpawnGameTime >= RIFT_LIFETIME) {
             despawnRift(world, false);
             return;
         }
 
         // Игрок далеко
-        PlayerEntity near = world.getClosestPlayer(activeRiftPos.getX() + 0.5, activeRiftPos.getY() + 0.5, activeRiftPos.getZ() + 0.5,
+        PlayerEntity near = world.getClosestPlayer(
+                activeRiftPos.getX() + 0.5,
+                activeRiftPos.getY() + 0.5,
+                activeRiftPos.getZ() + 0.5,
                 DESPAWN_DIST, false);
         if (near == null) {
             despawnRift(world, false);
@@ -159,8 +210,7 @@ public final class RiftManager {
             if (isWaveCleared(world)) {
                 startNextWave(world);
             } else {
-                // следующая проверка через 2 сек
-                nextWaveCheckAt = now + 2 * TPS;
+                nextWaveCheckAt = now + 2 * TPS; // проверяем раз в 2 сек
             }
         }
     }
@@ -200,12 +250,7 @@ public final class RiftManager {
             return;
         }
 
-        int count = switch (currentWave) {
-            case 1 -> 3;
-            case 2 -> 4;
-            case 3 -> 5;
-            default -> 0;
-        };
+        int count = (currentWave == 1) ? 3 : (currentWave == 2 ? 4 : 5);
 
         for (int i = 0; i < count; i++) {
             BlockPos spawn = pickNearbySpawn(world, activeRiftPos, 4, 8);
@@ -245,7 +290,7 @@ public final class RiftManager {
     }
 
     // ===========================
-    //   Спавн доккеби/статы
+    //   Спавн доккеби/скейлинг
     // ===========================
     private void spawnDokkebi(ServerWorld world, BlockPos pos) {
         EntityType<? extends MobEntity> type = getDokkebiType();
@@ -254,9 +299,11 @@ public final class RiftManager {
 
         mob.refreshPositionAndAngles(pos.getX() + 0.5, pos.getY(), pos.getZ() + 0.5, world.getRandom().nextFloat() * 360f, 0f);
 
-        if (activatorUuid != null && mob instanceof LivingEntity living) {
+        if (activatorUuid != null) {
             ServerPlayerEntity sp = world.getServer().getPlayerManager().getPlayer(activatorUuid);
             if (sp != null) {
+                // MobEntity уже является LivingEntity — без pattern matching
+                LivingEntity living = mob;
                 applyLevelScaling(living, sp.experienceLevel);
             }
         }
@@ -267,8 +314,9 @@ public final class RiftManager {
     @SuppressWarnings("unchecked")
     private EntityType<? extends MobEntity> getDokkebiType() {
         Optional<EntityType<?>> opt = Registries.ENTITY_TYPE.getOrEmpty(DOKKEBI_ID);
-        if (opt.isPresent() && opt.get() instanceof EntityType<?> t) {
-            return (EntityType<? extends MobEntity>) t;
+        if (opt.isPresent()) {
+            EntityType<?> raw = opt.get();
+            return (EntityType<? extends MobEntity>) raw;
         }
         return (EntityType<? extends MobEntity>) EntityType.ZOMBIE; // fallback
     }
@@ -305,8 +353,6 @@ public final class RiftManager {
     //   Поиск позиции для рифта
     // ===========================
     private BlockPos findRiftSpawnPosNearPlayer(ServerWorld world, ServerPlayerEntity p, int minDist, int maxDist, int yTol) {
-        Block runicBlock = Registries.BLOCK.getOrEmpty(RUNIC_OBSIDIAN_ID).orElse(Blocks.BEDROCK);
-
         Random rnd = world.getRandom();
         BlockPos base = p.getBlockPos();
         int baseY = base.getY();
