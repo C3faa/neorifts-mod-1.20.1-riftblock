@@ -33,13 +33,13 @@ jobs:
           restore-keys: |
             ${{ runner.os }}-gradle-
 
-      - name: Install Gradle 8.2
+      - name: Install Gradle 8.10.2
         run: |
-          GRADLE_VERSION=8.2
+          GRADLE_VERSION=8.10.2
           curl -L -o gradle.zip "https://services.gradle.org/distributions/gradle-${GRADLE_VERSION}-bin.zip"
           unzip -q gradle.zip
           echo "$PWD/gradle-${GRADLE_VERSION}/bin" >> $GITHUB_PATH
-
+                              
       - name: Gradle version
         run: gradle --version
 
