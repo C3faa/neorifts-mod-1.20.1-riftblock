@@ -2,7 +2,7 @@ package com.neoseoul;
 
 import com.mojang.brigadier.CommandDispatcher;
 import com.neoseoul.rift.RiftManager;
-import com.neoseoul.util.LevelWatcher;
+import com.neoseoul.util.LevelTracker;
 import net.fabricmc.api.ModInitializer;
 import net.fabricmc.fabric.api.command.v2.CommandRegistrationCallback;
 import net.fabricmc.fabric.api.event.lifecycle.v1.ServerTickEvents;
@@ -16,13 +16,13 @@ public class NeoriftsMod implements ModInitializer {
 
     @Override
     public void onInitialize() {
-        // Тики сервера: обновляем рифт и отслеживаем уровни игроков
+        // Периодические тики
         ServerTickEvents.END_SERVER_TICK.register((MinecraftServer server) -> {
             RiftManager.get(server).tick(server);
-            LevelWatcher.get(server).tick(server);
+            LevelTracker.get(server).tick(server); // <— было LevelWatcher, теперь LevelTracker
         });
 
-        // Команды
+        // Команды /rift
         CommandRegistrationCallback.EVENT.register((CommandDispatcher<ServerCommandSource> disp, reg, env) -> {
             disp.register(literal("rift").requires(src -> src.hasPermissionLevel(2))
                 .then(literal("create").executes(ctx -> {
