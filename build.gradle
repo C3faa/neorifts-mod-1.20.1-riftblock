@@ -1,36 +1,21 @@
 plugins {
-  id 'fabric-loom' version '1.6.+'
-  id 'maven-publish'
+    id 'fabric-loom' version '1.6.+'
+    id 'maven-publish'
 }
-
-
-
-sourceCompatibility = JavaVersion.VERSION_17
-targetCompatibility = JavaVersion.VERSION_17
-
-group = 'com.neoseoul'
-version = '0.2.0'
 
 repositories {
-  maven { url 'https://libraries.minecraft.net/' }
-  maven { url 'https://maven.fabricmc.net/' }
-  mavenCentral()
+    maven { url 'https://libraries.minecraft.net/' }
+    maven { url 'https://maven.fabricmc.net/' }
+    mavenCentral()
 }
 
-
-
-
+// ВАЖНО: никаких отдельных под-модулей fabric-api (fabric-networking-api-v1 и пр.)!
+// Только монолитный пакет, подходящий под 1.20.1.
 dependencies {
     minecraft "com.mojang:minecraft:1.20.1"
-    mappings "net.fabricmc:yarn:1.20.1+build.10:v2"
+    mappings loom.yarn("1.20.1+build.10:v2")
     modImplementation "net.fabricmc:fabric-loader:0.14.22"
-    modImplementation "net.fabricmc.fabric-api:fabric-api:0.92.0+1.20.1"
+
+    // Монолитный Fabric API для 1.20.1
+    modImplementation "net.fabricmc.fabric-api:fabric-api:0.92.1+1.20.1"
 }
-
-loom { splitEnvironmentSourceSets() }
-
-tasks.withType(JavaCompile).configureEach {
-    it.options.release = 17
-}
-
-jar { from("LICENSE") { rename { "${it}_${project.archivesBaseName}" } } }
