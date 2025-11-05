@@ -1,0 +1,22 @@
+{
+  "schemaVersion": 1,
+  "id": "neorifts",
+  "version": "0.2.0",
+  "name": "NeoRifts",
+  "description": "Runic Obsidian rifts with waves of Dokkebi.",
+  "authors": [
+    "you"
+  ],
+  "license": "MIT",
+  "environment": "*",
+  "entrypoints": {
+    "main": [
+      "com.neoseoul.NeoriftsMod"
+    ]
+  },
+  "depends": {
+    "fabricloader": ">=0.14.22",
+    "minecraft": "1.20.1",
+    "fabric-api": "*"
+  }
+}
