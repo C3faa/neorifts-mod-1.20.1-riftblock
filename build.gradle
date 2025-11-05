@@ -9,13 +9,32 @@ repositories {
     mavenCentral()
 }
 
-// ВАЖНО: никаких отдельных под-модулей fabric-api (fabric-networking-api-v1 и пр.)!
-// Только монолитный пакет, подходящий под 1.20.1.
 dependencies {
     minecraft "com.mojang:minecraft:1.20.1"
-    mappings loom.yarn("1.20.1+build.10:v2")
+
+    // Было: mappings loom.yarn("1.20.1+build.10:v2") — больше не поддерживается в Loom 1.6
+    // Стало: обычная координата Yarn
+    mappings "net.fabricmc:yarn:1.20.1+build.10:v2"
+
+    // Загрузчик
     modImplementation "net.fabricmc:fabric-loader:0.14.22"
 
-    // Монолитный Fabric API для 1.20.1
+    // Монолитный Fabric API (совместим с 1.20.1)
     modImplementation "net.fabricmc.fabric-api:fabric-api:0.92.1+1.20.1"
+}
+
+java {
+    toolchain {
+        languageVersion = JavaLanguageVersion.of(17)
+    }
+}
+
+// (по желанию) публикация — можно оставить пустой
+publishing {
+    publications {
+        // …
+    }
+    repositories {
+        // …
+    }
 }
